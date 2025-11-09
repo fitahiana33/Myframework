@@ -1,0 +1,98 @@
+Compilation des annotations... 
+Compilation des classes utilitaires... 
+Compilation du FrontServlet... 
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:11: error: cannot find symbol
+public class FrontServlet extends HttpServlet {
+                                  ^
+  symbol: class HttpServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:18: error: cannot find symbol
+    public void init() throws ServletException {
+                              ^
+  symbol:   class ServletException
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:47: error: cannot find symbol
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+                         ^
+  symbol:   class HttpServletRequest
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:47: error: cannot find symbol
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+                                                     ^
+  symbol:   class HttpServletResponse
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:48: error: cannot find symbol
+            throws ServletException, IOException {
+                   ^
+  symbol:   class ServletException
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:121: error: cannot find symbol
+    protected void doPost(HttpServletRequest request, HttpServletResponse response)
+                          ^
+  symbol:   class HttpServletRequest
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:121: error: cannot find symbol
+    protected void doPost(HttpServletRequest request, HttpServletResponse response)
+                                                      ^
+  symbol:   class HttpServletResponse
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:122: error: cannot find symbol
+            throws ServletException, IOException {
+                   ^
+  symbol:   class ServletException
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:5: error: package jakarta.servlet does not exist
+import jakarta.servlet.*;
+^
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:6: error: package jakarta.servlet.http does not exist
+import jakarta.servlet.http.*;
+^
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:17: error: method does not override or implement a method from a supertype
+    @Override
+    ^
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:21: error: cannot find symbol
+            String packageToScan = getInitParameter("controllers-package");
+                                   ^
+  symbol:   method getInitParameter(String)
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:24: error: cannot find symbol
+                throw new ServletException("Le paramètre 'controllers-package' est requis dans web.xml");
+                          ^
+  symbol:   class ServletException
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:32: error: cannot find symbol
+            getServletContext().setAttribute("urlMappings", urlMappings);
+            ^
+  symbol:   method getServletContext()
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:42: error: cannot find symbol
+            throw new ServletException("Erreur lors du scan des contrôleurs", e);
+                      ^
+  symbol:   class ServletException
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:46: error: method does not override or implement a method from a supertype
+    @Override
+    ^
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:60: error: cannot find symbol
+        String realPath = getServletContext().getRealPath(relativePath);
+                          ^
+  symbol:   method getServletContext()
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:64: error: cannot find symbol
+                RequestDispatcher dispatcher = request.getRequestDispatcher(relativePath);
+                ^
+  symbol:   class RequestDispatcher
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:72: error: cannot find symbol
+        Map<String, Mapping> urlMappings = (Map<String, Mapping>) getServletContext().getAttribute("urlMappings");
+                                                                  ^
+  symbol:   method getServletContext()
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:108: error: cannot find symbol
+            response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                               ^
+  symbol:   variable HttpServletResponse
+  location: class FrontServlet
+D:\BOSSY\cours\L3\S5\Mr_Naina\framework\MyFramework\src\com\nandrianina\framework\FrontServlet.java:120: error: method does not override or implement a method from a supertype
+    @Override
+    ^
+21 errors
