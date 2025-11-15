@@ -136,7 +136,11 @@ public class FrontServlet extends HttpServlet {
             if (!view.startsWith("/")) {
                 view = "/" + view;
             }
-            // Avec le mapping "/", les JSP ne repassent plus par FrontServlet
+            // Ajouter toutes les données du ModelView dans la request
+            for (String key : mv.getData().keySet()) {
+                request.setAttribute(key, mv.getData().get(key));
+            }
+            // Forward vers la JSP
             RequestDispatcher dispatcher = request.getRequestDispatcher(view);
             dispatcher.forward(request, response);
             return;
