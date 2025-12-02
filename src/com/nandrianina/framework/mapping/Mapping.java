@@ -3,6 +3,7 @@ package com.nandrianina.framework.mapping;
 public class Mapping {
     private String className;
     private String methodName;
+    private String originalUrl;
 
     public Mapping() {
     }
@@ -26,6 +27,15 @@ public class Mapping {
 
     public void setMethodName(String methodName) {
         this.methodName = methodName;
+    }
+
+
+    public String getOriginalUrl() {
+        return originalUrl;
+    }
+
+    public void setOriginalUrl(String originalUrl) {
+        this.originalUrl = originalUrl;
     }
 
     @Override
