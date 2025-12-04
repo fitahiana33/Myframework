@@ -3,6 +3,7 @@ package com.nandrianina.framework;
 import com.nandrianina.framework.mapping.Mapping;
 import com.nandrianina.framework.modelView.ModelView;
 import com.nandrianina.framework.util.*;
+import com.nandrianina.framework.annotation.*;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import java.io.*;
@@ -163,31 +164,35 @@ public class FrontServlet extends HttpServlet {
                 throw new RuntimeException("Méthode non trouvée : " + mapping.getMethodName());
             }
 
-            // Préparer les arguments à partir des paramètres d'URL (par ordre)
+            // Préparer les arguments (support @RequestParam + paramètres d'URL par ordre)
             Parameter[] parameters = method.getParameters();
             Object[] args = new Object[parameters.length];
 
-            if (parameters.length > 0 && mapping.getOriginalUrl() != null) {
-                String patternUrl = mapping.getOriginalUrl();
-                Pattern pattern = PatternCache.getPattern(patternUrl);
-                Matcher matcher = pattern.matcher(url);
+            // Extraire les valeurs des paramètres d'URL (ex: /user/123 → id = "123")
+            java.util.List<String> pathVariables = extractPathVariables(url, mapping.getOriginalUrl());
 
-                if (matcher.matches()) {
-                    String[] patternParts = patternUrl.split("/");
-                    String[] pathParts = url.split("/");
+            int pathVarIndex = 0;
 
-                    int paramIndex = 0; // indice dans les paramètres de la méthode
+            for (int i = 0; i < parameters.length; i++) {
+                Parameter param = parameters[i];
+                Object value = null;
 
-                    for (int i = 0; i < patternParts.length; i++) {
-                        if (patternParts[i].matches("\\{.+\\}")) {
-                            if (paramIndex < parameters.length) {
-                                String paramValue = (i < pathParts.length) ? pathParts[i] : "";
-                                args[paramIndex] = paramValue; // on remplit dans l'ordre
-                                paramIndex++;
-                            }
-                        }
-                    }
+                // 1. Cas @RequestParam → on cherche dans request.getParameter()
+                if (param.isAnnotationPresent(RequestParam.class)) {
+                    RequestParam rp = param.getAnnotation(RequestParam.class);
+                    String paramName = rp.value();
+                    String paramValue = request.getParameter(paramName);
+
+                    value = convert(paramValue, param.getType());
                 }
+                // 2. Sinon → injection par ordre des {id} dans l'URL
+                else if (pathVarIndex < pathVariables.size()) {
+                    String pathValue = pathVariables.get(pathVarIndex);
+                    value = convert(pathValue, param.getType());
+                    pathVarIndex++;
+                }
+
+                args[i] = value;
             }
 
             Object result = method.invoke(controllerInstance, args);
@@ -204,6 +209,42 @@ public class FrontServlet extends HttpServlet {
             out.println("Erreur: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    // Extrait les valeurs des parties variables de l'URL (ex: /Ex/sprint6/123 → ["123"])
+    private java.util.List<String> extractPathVariables(String requestPath, String patternUrl) {
+        java.util.List<String> values = new java.util.ArrayList<>();
+        if (patternUrl == null) return values;
+
+        String[] patternParts = patternUrl.split("/");
+        String[] pathParts = requestPath.split("/");
+
+        for (int i = 0; i < patternParts.length; i++) {
+            if (i < patternParts.length && patternParts[i].matches("\\{.+\\}")) {
+                if (i < pathParts.length) {
+                    values.add(pathParts[i]);
+                }
+            }
+        }
+        return values;
+    }
+
+    // Convertit une String en int, Integer, etc. (ou retourne String si inconnu)
+    private Object convert(String value, Class<?> targetType) {
+        if (value == null) return null;
+    
+        try {
+            if (targetType == int.class || targetType == Integer.class) {
+                return Integer.parseInt(value);
+            }
+            if (targetType == long.class || targetType == Long.class) {
+                return Long.parseLong(value);
+            }
+            // ... autres types
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Paramètre invalide : '" + value + "' n'est pas un " + targetType.getSimpleName());
+        }
+        return value;
     }
 
     private void handleResult(Object result, HttpServletRequest request, HttpServletResponse response)
