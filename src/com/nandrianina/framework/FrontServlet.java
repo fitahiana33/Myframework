@@ -2,21 +2,31 @@ package com.nandrianina.framework;
 
 import com.nandrianina.framework.mapping.Mapping;
 import com.nandrianina.framework.modelView.ModelView;
-import com.nandrianina.framework.util.PackageScanner;
+import com.nandrianina.framework.util.*;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import java.io.*;
 import java.lang.reflect.Method;
 import java.util.Map;
 
-/**
- * FrontServlet - Contrôleur frontal du framework MVC
- * Version simplifiée et restructurée
- */
 public class FrontServlet extends HttpServlet {
 
     @Override
     public void init() throws ServletException {
+        try {
+            scanner();
+        } catch (Exception e) {
+            throw new ServletException("Erreur lors de l'initialisation du framework", e);
+        }
+    }
+
+    @Override
+    protected void doGet(HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        processRequest(request, response);
+    }
+
+    private void scanner() throws Exception{
         try {
             // Récupérer le package à scanner
             String packageToScan = getInitParameter("controllers-package");
@@ -32,15 +42,20 @@ public class FrontServlet extends HttpServlet {
             getServletContext().setAttribute("controllerMethods", controllerMethods);
             
             System.out.println("Framework initialisé - " + urlMappings.size() + " mappings trouvés");
+            // Affichage détaillé de chaque mapping
+            for (Map.Entry<String, Mapping> entry : urlMappings.entrySet()) {
+                String url = entry.getKey();
+                Mapping mapping = entry.getValue();
+                
+                System.out.println("URL : " + url 
+                    + " -> " + mapping.getClassName() 
+                    + "." + mapping.getMethodName() 
+                    //+ (mapping.getHttpMethod() != null ? " (" + mapping.getHttpMethod() + ")" : "")
+                    );
+            }
         } catch (Exception e) {
             throw new ServletException("Erreur lors de l'initialisation du framework", e);
-        }
-    }
-
-    @Override
-    protected void doGet(HttpServletRequest request, HttpServletResponse response)
-            throws ServletException, IOException {
-        processRequest(request, response);
+        }        
     }
 
     @Override
@@ -66,21 +81,15 @@ public class FrontServlet extends HttpServlet {
             }
         }
         
-        @SuppressWarnings("unchecked")
         Map<String, Mapping> urlMappings = (Map<String, Mapping>) getServletContext().getAttribute("urlMappings");
-        
-        @SuppressWarnings("unchecked")
-        Map<String, Map<String, String>> controllerMethods = (Map<String, Map<String, String>>) 
-            getServletContext().getAttribute("controllerMethods");
-        
-        // 1. URL mappée à une méthode
-        if (urlMappings != null && urlMappings.containsKey(path)) {
-            invokeControllerMethod(path, urlMappings.get(path), request, response);
-            return;
-        }
-        
-        // 2. URL de contrôleur (afficher les méthodes)
-        if (controllerMethods != null && displayControllerInfo(path, controllerMethods, response)) {
+
+        // RECHERCHE D'UN MAPPING (exact ou avec paramètre)
+        Mapping mapping = findMapping(path, urlMappings);
+
+        if (mapping != null) {
+            // Extraire les paramètres et les mettre dans la request
+            extractParameters(path, mapping.getOriginalUrl(), request);
+            invokeControllerMethod(path, mapping, request, response);
             return;
         }
         
@@ -90,6 +99,47 @@ public class FrontServlet extends HttpServlet {
         PrintWriter out = response.getWriter();
         out.println("Erreur 404 : Page non trouvée");
         out.println("URL: " + path);
+    }
+
+    private Mapping findMapping(String requestPath, Map<String, Mapping> urlMappings) {
+        // 1. Recherche exacte d'abord
+        if (urlMappings.containsKey(requestPath)) {
+            Mapping m = urlMappings.get(requestPath);
+            m.setOriginalUrl(requestPath); // on garde l'URL exacte
+            return m;
+        }
+
+        // 2. Recherche avec paramètres {var}
+        for (Map.Entry<String, Mapping> entry : urlMappings.entrySet()) {
+            String mappedUrl = entry.getKey();
+            java.util.regex.Pattern pattern = PatternCache.getPattern(mappedUrl);
+            java.util.regex.Matcher matcher = pattern.matcher(requestPath);
+
+            if (matcher.matches()) {
+                Mapping m = entry.getValue();
+                m.setOriginalUrl(mappedUrl); // on garde le pattern original
+                return m;
+            }
+        }
+        return null;
+    }
+
+    private void extractParameters(String requestPath, String mappedUrl, HttpServletRequest request) {
+        java.util.regex.Pattern pattern = PatternCache.getPattern(mappedUrl);
+        java.util.regex.Matcher matcher = pattern.matcher(requestPath);
+
+        if (matcher.matches()) {
+            String[] pathParts = requestPath.split("/");
+            String[] patternParts = mappedUrl.split("/");
+
+            for (int i = 0; i < patternParts.length; i++) {
+                if (patternParts[i].startsWith("{") && patternParts[i].endsWith("}")) {
+                    String paramName = patternParts[i].substring(1, patternParts[i].length() - 1);
+                    String paramValue = i < pathParts.length ? pathParts[i] : "";
+                    request.setAttribute(paramName, paramValue);
+                }
+            }
+        }
     }
 
     private void invokeControllerMethod(String url, Mapping mapping,
