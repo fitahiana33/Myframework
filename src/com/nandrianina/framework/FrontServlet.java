@@ -6,8 +6,10 @@ import com.nandrianina.framework.util.*;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import java.io.*;
-import java.lang.reflect.Method;
+import java.lang.reflect.*;
 import java.util.Map;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 
 public class FrontServlet extends HttpServlet {
 
@@ -148,8 +150,47 @@ public class FrontServlet extends HttpServlet {
         try {
             Class<?> controllerClass = Class.forName(mapping.getClassName());
             Object controllerInstance = controllerClass.getDeclaredConstructor().newInstance();
-            Method method = controllerClass.getMethod(mapping.getMethodName());
-            Object result = method.invoke(controllerInstance);
+            
+            // Trouver la méthode par son nom (marche même si elle a des paramètres)
+            Method method = null;
+            for (Method m : controllerClass.getDeclaredMethods()) {
+                if (m.getName().equals(mapping.getMethodName())) {
+                    method = m;
+                    break;
+                }
+            }
+            if (method == null) {
+                throw new RuntimeException("Méthode non trouvée : " + mapping.getMethodName());
+            }
+
+            // Préparer les arguments à partir des paramètres d'URL (par ordre)
+            Parameter[] parameters = method.getParameters();
+            Object[] args = new Object[parameters.length];
+
+            if (parameters.length > 0 && mapping.getOriginalUrl() != null) {
+                String patternUrl = mapping.getOriginalUrl();
+                Pattern pattern = PatternCache.getPattern(patternUrl);
+                Matcher matcher = pattern.matcher(url);
+
+                if (matcher.matches()) {
+                    String[] patternParts = patternUrl.split("/");
+                    String[] pathParts = url.split("/");
+
+                    int paramIndex = 0; // indice dans les paramètres de la méthode
+
+                    for (int i = 0; i < patternParts.length; i++) {
+                        if (patternParts[i].matches("\\{.+\\}")) {
+                            if (paramIndex < parameters.length) {
+                                String paramValue = (i < pathParts.length) ? pathParts[i] : "";
+                                args[paramIndex] = paramValue; // on remplit dans l'ordre
+                                paramIndex++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            Object result = method.invoke(controllerInstance, args);
             
             handleResult(result, request, response);
             
