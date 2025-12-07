@@ -11,6 +11,7 @@ import java.lang.reflect.*;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
+import java.util.*;
 
 public class FrontServlet extends HttpServlet {
 
@@ -105,36 +106,36 @@ public class FrontServlet extends HttpServlet {
         out.println("URL: " + path);
     }
 
-private Mapping findMapping(String requestPath, String requestMethod, Map<String, Mapping> urlMappings) {
-    // 1. Recherche exacte
-    String exactKey = requestPath + "|||" + requestMethod;
-    Mapping mapping = urlMappings.get(exactKey);
-    if (mapping != null && mapping.getHttpMethod().equalsIgnoreCase(requestMethod)) {
-        return mapping;
-    }
-
-    // 2. Recherche avec paramètres {id}
-    for (Map.Entry<String, Mapping> entry : urlMappings.entrySet()) {
-        String key = entry.getKey();
-        String[] parts = key.split("\\|\\|\\|");
-        String mappedUrl = parts[0];
-        String mappedMethod = parts[1];
-
-        if (!mappedMethod.equalsIgnoreCase(requestMethod)) {
-            continue;
-        }
-
-        Pattern pattern = PatternCache.getPattern(mappedUrl);
-        Matcher matcher = pattern.matcher(requestPath);
-
-        if (matcher.matches()) {
-            mapping = entry.getValue();
-            mapping.setOriginalUrl(mappedUrl);
+    private Mapping findMapping(String requestPath, String requestMethod, Map<String, Mapping> urlMappings) {
+        // 1. Recherche exacte
+        String exactKey = requestPath + "|||" + requestMethod;
+        Mapping mapping = urlMappings.get(exactKey);
+        if (mapping != null && mapping.getHttpMethod().equalsIgnoreCase(requestMethod)) {
             return mapping;
         }
+
+        // 2. Recherche avec paramètres {id}
+        for (Map.Entry<String, Mapping> entry : urlMappings.entrySet()) {
+            String key = entry.getKey();
+            String[] parts = key.split("\\|\\|\\|");
+            String mappedUrl = parts[0];
+            String mappedMethod = parts[1];
+
+            if (!mappedMethod.equalsIgnoreCase(requestMethod)) {
+                continue;
+            }
+
+            Pattern pattern = PatternCache.getPattern(mappedUrl);
+            Matcher matcher = pattern.matcher(requestPath);
+
+            if (matcher.matches()) {
+                mapping = entry.getValue();
+                mapping.setOriginalUrl(mappedUrl);
+                return mapping;
+            }
+        }
+        return null;
     }
-    return null;
-}
 
     private void extractParameters(String requestPath, String mappedUrl, HttpServletRequest request) {
         java.util.regex.Pattern pattern = PatternCache.getPattern(mappedUrl);
@@ -160,8 +161,8 @@ private Mapping findMapping(String requestPath, String requestMethod, Map<String
         try {
             Class<?> controllerClass = Class.forName(mapping.getClassName());
             Object controllerInstance = controllerClass.getDeclaredConstructor().newInstance();
-            
-            // Trouver la méthode par son nom (marche même si elle a des paramètres)
+
+            // Trouver la méthode
             Method method = null;
             for (Method m : controllerClass.getDeclaredMethods()) {
                 if (m.getName().equals(mapping.getMethodName())) {
@@ -173,75 +174,70 @@ private Mapping findMapping(String requestPath, String requestMethod, Map<String
                 throw new RuntimeException("Méthode non trouvée : " + mapping.getMethodName());
             }
 
-            // Préparer les arguments (support @RequestParam + paramètres d'URL par ordre)
             Parameter[] parameters = method.getParameters();
             Object[] args = new Object[parameters.length];
 
-            // Extraire les valeurs des paramètres d'URL (ex: /user/123 → id = "123")
+            // Extraire les path variables {id}
             java.util.List<String> pathVariables = extractPathVariables(url, mapping.getOriginalUrl());
-
             int pathVarIndex = 0;
-            java.util.List<String> queryValuesInOrder = null;
-            int queryIndex = 0;
 
+            // 1. On crée la map globale de TOUS les paramètres
+            Map<String, Object> allParams = buildAllParametersMap(request);
+
+            // 2. Liste ordonnée pour le fallback (quand le nom n'existe pas)
+            List<String> orderedValues = new ArrayList<>();
+            for (Object v : allParams.values()) {
+                if (v instanceof List<?> list && !list.isEmpty()) {
+                    orderedValues.add(list.get(0).toString());
+                } else {
+                    orderedValues.add(v.toString());
+                }
+            }
+            int fallbackIndex = 0;
+
+            // 3. On remplit les arguments
             for (int i = 0; i < parameters.length; i++) {
                 Parameter param = parameters[i];
                 Object value = null;
 
-                // 1. Cas @RequestParam → on cherche dans request.getParameter()
-                if (param.isAnnotationPresent(RequestParam.class)) {
+                // CAS 1 : injection de toute la map
+                if (Map.class.isAssignableFrom(param.getType())) {
+                    value = allParams;
+                }
+                // CAS 2 : @RequestParam → priorité au nom, sinon fallback
+                else if (param.isAnnotationPresent(RequestParam.class)) {
                     RequestParam rp = param.getAnnotation(RequestParam.class);
-                    String expectedName = rp.value();
-                    String paramValue = request.getParameter(expectedName);  // 1. essai exact
+                    String paramName = rp.value();
+                    String[] values = request.getParameterValues(paramName);
 
-                    // 2. SI pas trouvé → fallback : on prend par ordre
-                    if (paramValue == null) {
-                        // On récupère tous les paramètres dans l'ordre d'apparition
-                        if (queryValuesInOrder == null) {
-                            queryValuesInOrder = new java.util.ArrayList<>();
-                            java.util.LinkedHashMap<String, String[]> map = 
-                                new java.util.LinkedHashMap<>(request.getParameterMap());
-                            for (String[] vals : map.values()) {
-                                if (vals != null && vals.length > 0) {
-                                    queryValuesInOrder.add(vals[0]);
-                                }
+                    if (values != null && values.length > 0) {
+                        if (values.length == 1) {
+                            value = convert(values[0], param.getType());
+                        } else {
+                            if (param.getType() == String[].class) {
+                                value = values;
+                            } else if (List.class.isAssignableFrom(param.getType())) {
+                                value = java.util.Arrays.asList(values);
+                            } else {
+                                value = convert(values[0], param.getType());
                             }
                         }
-                        if (queryIndex < queryValuesInOrder.size()) {
-                            paramValue = queryValuesInOrder.get(queryIndex++);
-                        }
-                    }
-
-                    // Conversion finale
-                    if (paramValue != null && !paramValue.trim().isEmpty()) {
-                        value = convert(paramValue, param.getType());
                     } else if (param.getType().isPrimitive() && rp.required()) {
-                        throw new IllegalArgumentException("Paramètre requis manquant : " + expectedName);
+                        throw new IllegalArgumentException("Paramètre requis manquant : " + paramName);
                     }
                 }
-                // 2. Sinon → injection par ordre des {id} dans l'URL
+                // CAS 3 : path variable {id}
                 else if (pathVarIndex < pathVariables.size()) {
-                    String pathValue = pathVariables.get(pathVarIndex);
-                    value = convert(pathValue, param.getType());
-                    pathVarIndex++;
-                }
-                // 3. Sinon → paramètre sans annotation : on essaye par le nom Java (fallback)
-                else {
-                    String paramName = param.getName();
-                    String paramValue = request.getParameter(paramName);
-                    if (paramValue != null && paramValue.trim().length() > 0) {
-                        value = convert(paramValue, param.getType());
-                    }
-                    // sinon value reste null → OK si type non primitif
+                    value = convert(pathVariables.get(pathVarIndex++), param.getType());
                 }
 
                 args[i] = value;
             }
 
+            // Invocation de la méthode
             Object result = method.invoke(controllerInstance, args);
-            
             handleResult(result, request, response);
-            
+
         } catch (Exception e) {
             response.setContentType("text/plain; charset=UTF-8");
             PrintWriter out = response.getWriter();
@@ -250,8 +246,28 @@ private Mapping findMapping(String requestPath, String requestMethod, Map<String
             out.println("Contrôleur: " + mapping.getClassName());
             out.println("Méthode: " + mapping.getMethodName());
             out.println("Erreur: " + e.getMessage());
-            e.printStackTrace();
+            e.printStackTrace(out);
         }
+    }
+
+    // MÉTHODE À AJOUTER EN BAS DE LA CLASSE
+    private Map<String, Object> buildAllParametersMap(HttpServletRequest request) {
+        Map<String, Object> map = new HashMap<>();
+        java.util.Enumeration<String> names = request.getParameterNames();
+
+        while (names.hasMoreElements()) {
+            String name = names.nextElement();
+            String[] values = request.getParameterValues(name);
+
+            if (values != null && values.length > 0) {
+                if (values.length == 1) {
+                    map.put(name, values[0]);
+                } else {
+                    map.put(name, java.util.Arrays.asList(values)); // checkboxes
+                }
+            }
+        }
+        return map;
     }
 
     // Extrait les valeurs des parties variables de l'URL (ex: /Ex/sprint6/123 → ["123"])
@@ -308,9 +324,14 @@ private Mapping findMapping(String requestPath, String requestMethod, Map<String
         if (result instanceof ModelView) {
             ModelView mv = (ModelView) result;
             String view = mv.getView();
+            HashMap<String, Object> data = mv.getData();
             if (!view.startsWith("/")) {
                 view = "/" + view;
             }
+
+            // 1. On donne toute la map (pour ceux qui veulent l'utiliser)
+            request.setAttribute("model", data);
+
             // Ajouter toutes les données du ModelView dans la request
             for (String key : mv.getData().keySet()) {
                 request.setAttribute(key, mv.getData().get(key));
