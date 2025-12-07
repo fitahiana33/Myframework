@@ -2,16 +2,9 @@ package com.nandrianina.framework.modelView;
 
 import java.util.HashMap;
 
-/**
- * Classe représentant une vue avec son nom de fichier et les données à passer
- */
 public class ModelView {
     private String view;
     private HashMap<String, Object> data;
-
-    public ModelView() {
-        this.data = new HashMap<>();
-    }
 
     public ModelView(String view) {
         this.view = view;

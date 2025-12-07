@@ -73,6 +73,7 @@ public class FrontServlet extends HttpServlet {
         String uri = request.getRequestURI();
         String contextPath = request.getContextPath();
         String path = uri.substring(contextPath.length());
+        String requestMethod = request.getMethod(); // "GET" ou "POST"
         
         // Si c'est un fichier .jsp qui existe, utiliser la chaîne de filtres par défaut
         if (path.endsWith(".jsp")) {
@@ -87,7 +88,7 @@ public class FrontServlet extends HttpServlet {
         Map<String, Mapping> urlMappings = (Map<String, Mapping>) getServletContext().getAttribute("urlMappings");
 
         // RECHERCHE D'UN MAPPING (exact ou avec paramètre)
-        Mapping mapping = findMapping(path, urlMappings);
+        Mapping mapping = findMapping(path, request.getMethod(), urlMappings);
 
         if (mapping != null) {
             // Extraire les paramètres et les mettre dans la request
@@ -104,28 +105,36 @@ public class FrontServlet extends HttpServlet {
         out.println("URL: " + path);
     }
 
-    private Mapping findMapping(String requestPath, Map<String, Mapping> urlMappings) {
-        // 1. Recherche exacte d'abord
-        if (urlMappings.containsKey(requestPath)) {
-            Mapping m = urlMappings.get(requestPath);
-            m.setOriginalUrl(requestPath); // on garde l'URL exacte
-            return m;
-        }
-
-        // 2. Recherche avec paramètres {var}
-        for (Map.Entry<String, Mapping> entry : urlMappings.entrySet()) {
-            String mappedUrl = entry.getKey();
-            java.util.regex.Pattern pattern = PatternCache.getPattern(mappedUrl);
-            java.util.regex.Matcher matcher = pattern.matcher(requestPath);
-
-            if (matcher.matches()) {
-                Mapping m = entry.getValue();
-                m.setOriginalUrl(mappedUrl); // on garde le pattern original
-                return m;
-            }
-        }
-        return null;
+private Mapping findMapping(String requestPath, String requestMethod, Map<String, Mapping> urlMappings) {
+    // 1. Recherche exacte
+    String exactKey = requestPath + "|||" + requestMethod;
+    Mapping mapping = urlMappings.get(exactKey);
+    if (mapping != null && mapping.getHttpMethod().equalsIgnoreCase(requestMethod)) {
+        return mapping;
     }
+
+    // 2. Recherche avec paramètres {id}
+    for (Map.Entry<String, Mapping> entry : urlMappings.entrySet()) {
+        String key = entry.getKey();
+        String[] parts = key.split("\\|\\|\\|");
+        String mappedUrl = parts[0];
+        String mappedMethod = parts[1];
+
+        if (!mappedMethod.equalsIgnoreCase(requestMethod)) {
+            continue;
+        }
+
+        Pattern pattern = PatternCache.getPattern(mappedUrl);
+        Matcher matcher = pattern.matcher(requestPath);
+
+        if (matcher.matches()) {
+            mapping = entry.getValue();
+            mapping.setOriginalUrl(mappedUrl);
+            return mapping;
+        }
+    }
+    return null;
+}
 
     private void extractParameters(String requestPath, String mappedUrl, HttpServletRequest request) {
         java.util.regex.Pattern pattern = PatternCache.getPattern(mappedUrl);
@@ -181,11 +190,20 @@ public class FrontServlet extends HttpServlet {
                 if (param.isAnnotationPresent(RequestParam.class)) {
                     RequestParam rp = param.getAnnotation(RequestParam.class);
                     String paramName = rp.value();
+                    boolean required = rp.required();
+                    String defaultVal = rp.defaultValue();
                     String paramValue = request.getParameter(paramName);
 
+                    if ((paramValue == null || paramValue.trim().isEmpty()) && !"".equals(defaultVal)) {
+                        paramValue = defaultVal;
+                    }
+
                     if (paramValue == null || paramValue.isEmpty()) {
-                        //value = null;
-                        throw new IllegalArgumentException("Paramètre requis manquant : " + paramName);
+                        // Si c'est un type primitif (int, long, boolean...), on ne peut pas mettre null → erreur
+                        if (param.getType().isPrimitive()) {
+                            throw new IllegalArgumentException("Paramètre requis manquant : " + paramName);
+                        }
+                        value = null;
                     } else {
                         value = convert(paramValue, param.getType());
                     }
