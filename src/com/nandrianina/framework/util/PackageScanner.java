@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.nandrianina.framework.annotation.Url;
 
 public class PackageScanner {
 
@@ -23,22 +24,26 @@ public class PackageScanner {
         for (Class<?> clazz : classes) {
             if (clazz.isAnnotationPresent(Controller.class)) {
                 for (Method method : clazz.getDeclaredMethods()) {
-                    if (method.isAnnotationPresent(Get.class)) {
-                        Get getAnnotation = method.getAnnotation(Get.class);
-                        String url = getAnnotation.value();
-                        Mapping mapping = new Mapping(clazz.getName(), method.getName());
-                        urlMappings.put(url, mapping);
+                    if (method.isAnnotationPresent(Url.class)) {
+                        Url urlAnn = method.getAnnotation(Url.class);
+                        String url = urlAnn.value();
+                        String httpMethod = urlAnn.method();
+                        if (httpMethod == null || httpMethod.isEmpty()) {
+                            httpMethod = "GET";
+                        } else {
+                            httpMethod = httpMethod.toUpperCase();
+                        }
+                        Mapping mapping = new Mapping(clazz.getName(), method.getName(), httpMethod);
+                        mapping.setOriginalUrl(url); // important pour les {id}
+                        String key = url + "|||" + httpMethod;  // clé unique : /methode|||GET et /methode|||POST
+                        urlMappings.put(key, mapping);
                     }
                 }
             }
         }
-
         return urlMappings;
     }
 
-    /**
-     * Scanne un package et retourne un Map des contrôleurs vers leurs méthodes
-     */
     public static Map<String, Map<String, String>> scanControllerMethods(String packageName) throws Exception {
         Map<String, Map<String, String>> controllerMethods = new HashMap<>();
         List<Class<?>> classes = findClasses(packageName);
@@ -47,16 +52,15 @@ public class PackageScanner {
             if (clazz.isAnnotationPresent(Controller.class)) {
                 Map<String, String> methods = new HashMap<>();
                 for (Method method : clazz.getDeclaredMethods()) {
-                    if (method.isAnnotationPresent(Get.class)) {
-                        Get getAnnotation = method.getAnnotation(Get.class);
-                        String url = getAnnotation.value();
-                        methods.put(url, method.getName());
+                    if (method.isAnnotationPresent(Url.class)) {
+                        Url urlAnn = method.getAnnotation(Url.class);
+                        String url = urlAnn.value();
+                        methods.put(url + " [" + urlAnn.method() + "]", method.getName());
                     }
                 }
                 controllerMethods.put(clazz.getName(), methods);
             }
         }
-
         return controllerMethods;
     }
 
