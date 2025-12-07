@@ -181,6 +181,8 @@ private Mapping findMapping(String requestPath, String requestMethod, Map<String
             java.util.List<String> pathVariables = extractPathVariables(url, mapping.getOriginalUrl());
 
             int pathVarIndex = 0;
+            java.util.List<String> queryValuesInOrder = null;
+            int queryIndex = 0;
 
             for (int i = 0; i < parameters.length; i++) {
                 Parameter param = parameters[i];
@@ -189,23 +191,32 @@ private Mapping findMapping(String requestPath, String requestMethod, Map<String
                 // 1. Cas @RequestParam → on cherche dans request.getParameter()
                 if (param.isAnnotationPresent(RequestParam.class)) {
                     RequestParam rp = param.getAnnotation(RequestParam.class);
-                    String paramName = rp.value();
-                    boolean required = rp.required();
-                    String defaultVal = rp.defaultValue();
-                    String paramValue = request.getParameter(paramName);
+                    String expectedName = rp.value();
+                    String paramValue = request.getParameter(expectedName);  // 1. essai exact
 
-                    if ((paramValue == null || paramValue.trim().isEmpty()) && !"".equals(defaultVal)) {
-                        paramValue = defaultVal;
+                    // 2. SI pas trouvé → fallback : on prend par ordre
+                    if (paramValue == null) {
+                        // On récupère tous les paramètres dans l'ordre d'apparition
+                        if (queryValuesInOrder == null) {
+                            queryValuesInOrder = new java.util.ArrayList<>();
+                            java.util.LinkedHashMap<String, String[]> map = 
+                                new java.util.LinkedHashMap<>(request.getParameterMap());
+                            for (String[] vals : map.values()) {
+                                if (vals != null && vals.length > 0) {
+                                    queryValuesInOrder.add(vals[0]);
+                                }
+                            }
+                        }
+                        if (queryIndex < queryValuesInOrder.size()) {
+                            paramValue = queryValuesInOrder.get(queryIndex++);
+                        }
                     }
 
-                    if (paramValue == null || paramValue.isEmpty()) {
-                        // Si c'est un type primitif (int, long, boolean...), on ne peut pas mettre null → erreur
-                        if (param.getType().isPrimitive()) {
-                            throw new IllegalArgumentException("Paramètre requis manquant : " + paramName);
-                        }
-                        value = null;
-                    } else {
+                    // Conversion finale
+                    if (paramValue != null && !paramValue.trim().isEmpty()) {
                         value = convert(paramValue, param.getType());
+                    } else if (param.getType().isPrimitive() && rp.required()) {
+                        throw new IllegalArgumentException("Paramètre requis manquant : " + expectedName);
                     }
                 }
                 // 2. Sinon → injection par ordre des {id} dans l'URL
@@ -213,6 +224,15 @@ private Mapping findMapping(String requestPath, String requestMethod, Map<String
                     String pathValue = pathVariables.get(pathVarIndex);
                     value = convert(pathValue, param.getType());
                     pathVarIndex++;
+                }
+                // 3. Sinon → paramètre sans annotation : on essaye par le nom Java (fallback)
+                else {
+                    String paramName = param.getName();
+                    String paramValue = request.getParameter(paramName);
+                    if (paramValue != null && paramValue.trim().length() > 0) {
+                        value = convert(paramValue, param.getType());
+                    }
+                    // sinon value reste null → OK si type non primitif
                 }
 
                 args[i] = value;
