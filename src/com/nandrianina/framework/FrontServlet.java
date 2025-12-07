@@ -183,7 +183,12 @@ public class FrontServlet extends HttpServlet {
                     String paramName = rp.value();
                     String paramValue = request.getParameter(paramName);
 
-                    value = convert(paramValue, param.getType());
+                    if (paramValue == null || paramValue.isEmpty()) {
+                        //value = null;
+                        throw new IllegalArgumentException("Paramètre requis manquant : " + paramName);
+                    } else {
+                        value = convert(paramValue, param.getType());
+                    }
                 }
                 // 2. Sinon → injection par ordre des {id} dans l'URL
                 else if (pathVarIndex < pathVariables.size()) {
@@ -202,7 +207,7 @@ public class FrontServlet extends HttpServlet {
         } catch (Exception e) {
             response.setContentType("text/plain; charset=UTF-8");
             PrintWriter out = response.getWriter();
-            out.println("Erreur lors de l'exécution:");
+            out.println("Erreur lors de l'invocation du methode :");
             out.println("URL: " + url);
             out.println("Contrôleur: " + mapping.getClassName());
             out.println("Méthode: " + mapping.getMethodName());
