@@ -77,7 +77,7 @@ public class FrontServlet extends HttpServlet {
         String requestMethod = request.getMethod(); // "GET" ou "POST"
         
         // Si c'est un fichier .jsp qui existe, utiliser la chaîne de filtres par défaut
-        if (path.endsWith(".jsp")) {
+        if (path.endsWith(".jsp") || path.endsWith(".html")) {
             String realPath = getServletContext().getRealPath(path);
             if (realPath != null && new java.io.File(realPath).exists()) {
                 // Utiliser la chaîne par défaut (pas de traitement par FrontServlet)
@@ -185,6 +185,7 @@ public class FrontServlet extends HttpServlet {
             Map<String, Object> allParams = buildAllParametersMap(request);
 
             // 2. Liste ordonnée pour le fallback (quand le nom n'existe pas)
+            // Préparation du fallback
             List<String> orderedValues = new ArrayList<>();
             for (Object v : allParams.values()) {
                 if (v instanceof List<?> list && !list.isEmpty()) {
@@ -194,17 +195,17 @@ public class FrontServlet extends HttpServlet {
                 }
             }
             int fallbackIndex = 0;
+            boolean fallbackUsedForObject = false; // on n’utilise le fallback par ordre qu’une seule fois
 
-            // 3. On remplit les arguments
             for (int i = 0; i < parameters.length; i++) {
                 Parameter param = parameters[i];
                 Object value = null;
 
-                // CAS 1 : injection de toute la map
+                // 1. Map<String, Object>
                 if (Map.class.isAssignableFrom(param.getType())) {
                     value = allParams;
                 }
-                // CAS 2 : @RequestParam → priorité au nom, sinon fallback
+                // 2. @RequestParam
                 else if (param.isAnnotationPresent(RequestParam.class)) {
                     RequestParam rp = param.getAnnotation(RequestParam.class);
                     String paramName = rp.value();
@@ -217,18 +218,55 @@ public class FrontServlet extends HttpServlet {
                             if (param.getType() == String[].class) {
                                 value = values;
                             } else if (List.class.isAssignableFrom(param.getType())) {
-                                value = java.util.Arrays.asList(values);
+                                value = Arrays.asList(values);
                             } else {
                                 value = convert(values[0], param.getType());
                             }
                         }
-                    } else if (param.getType().isPrimitive() && rp.required()) {
-                        throw new IllegalArgumentException("Paramètre requis manquant : " + paramName);
+                    } else if (fallbackIndex < orderedValues.size()) {
+                        value = convert(orderedValues.get(fallbackIndex++), param.getType());
                     }
                 }
-                // CAS 3 : path variable {id}
+                // 3. Path variable {id}
                 else if (pathVarIndex < pathVariables.size()) {
                     value = convert(pathVariables.get(pathVarIndex++), param.getType());
+                }
+                // 4. OBJET PERSONNALISÉ (User, Adresse, etc.)
+                else {
+                    try {
+                        Object obj = param.getType().getDeclaredConstructor().newInstance();
+                        Field[] fields = param.getType().getDeclaredFields();
+
+                        boolean filled = false;
+
+                        // 1. On essaie par nom de champ
+                        for (Field field : fields) {
+                            String fieldName = field.getName();
+                            if (allParams.containsKey(fieldName)) {
+                                Object raw = allParams.get(fieldName);
+                                String strVal = (raw instanceof List<?> l && !l.isEmpty()) ? l.get(0).toString() : raw.toString();
+                                field.setAccessible(true);
+                                field.set(obj, convert(strVal, field.getType()));
+                                filled = true;
+                            }
+                        }
+
+                        // 2. Si rien trouvé → fallback par ordre (une seule fois pour tous les objets)
+                        if (!filled && !fallbackUsedForObject) {
+                            fallbackUsedForObject = true;
+                            int idx = 0;
+                            for (Field field : fields) {
+                                if (idx < orderedValues.size()) {
+                                    field.setAccessible(true);
+                                    field.set(obj, convert(orderedValues.get(idx++), field.getType()));
+                                }
+                            }
+                        }
+
+                        value = obj;
+                    } catch (Exception ignored) {
+                        // si on ne peut pas créer l’objet → value reste null
+                    }
                 }
 
                 args[i] = value;
