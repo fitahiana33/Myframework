@@ -162,7 +162,6 @@ public class FrontServlet extends HttpServlet {
             Class<?> controllerClass = Class.forName(mapping.getClassName());
             Object controllerInstance = controllerClass.getDeclaredConstructor().newInstance();
 
-            // Trouver la méthode
             Method method = null;
             for (Method m : controllerClass.getDeclaredMethods()) {
                 if (m.getName().equals(mapping.getMethodName())) {
@@ -177,39 +176,36 @@ public class FrontServlet extends HttpServlet {
             Parameter[] parameters = method.getParameters();
             Object[] args = new Object[parameters.length];
 
-            // Extraire les path variables {id}
-            java.util.List<String> pathVariables = extractPathVariables(url, mapping.getOriginalUrl());
+            List<String> pathVariables = extractPathVariables(url, mapping.getOriginalUrl());
             int pathVarIndex = 0;
 
-            // 1. On crée la map globale de TOUS les paramètres
             Map<String, Object> allParams = buildAllParametersMap(request);
 
-            // 2. Liste ordonnée pour le fallback (quand le nom n'existe pas)
-            // Préparation du fallback
+            // Liste ordonnée pour fallback simple
             List<String> orderedValues = new ArrayList<>();
             for (Object v : allParams.values()) {
                 if (v instanceof List<?> list && !list.isEmpty()) {
                     orderedValues.add(list.get(0).toString());
-                } else {
+                } else if (v != null) {
                     orderedValues.add(v.toString());
                 }
             }
             int fallbackIndex = 0;
-            boolean fallbackUsedForObject = false; // on n’utilise le fallback par ordre qu’une seule fois
+            boolean fallbackUsedForSimpleObject = false; // Une seule fois pour les objets simples
 
             for (int i = 0; i < parameters.length; i++) {
                 Parameter param = parameters[i];
                 Object value = null;
 
-                // 1. Map<String, Object>
+                // 1. Map globale
                 if (Map.class.isAssignableFrom(param.getType())) {
                     value = allParams;
                 }
                 // 2. @RequestParam
                 else if (param.isAnnotationPresent(RequestParam.class)) {
                     RequestParam rp = param.getAnnotation(RequestParam.class);
-                    String paramName = rp.value();
-                    String[] values = request.getParameterValues(paramName);
+                    String name = rp.value();
+                    String[] values = request.getParameterValues(name);
 
                     if (values != null && values.length > 0) {
                         if (values.length == 1) {
@@ -227,11 +223,84 @@ public class FrontServlet extends HttpServlet {
                         value = convert(orderedValues.get(fallbackIndex++), param.getType());
                     }
                 }
-                // 3. Path variable {id}
+                // 3. Path variable
                 else if (pathVarIndex < pathVariables.size()) {
                     value = convert(pathVariables.get(pathVarIndex++), param.getType());
                 }
-                // 4. OBJET PERSONNALISÉ (User, Adresse, etc.)
+                // 4. LISTE OU TABLEAU D'OBJETS (List<User>, User[])
+                else if (List.class.isAssignableFrom(param.getType()) || param.getType().isArray()) {
+                    Class<?> elementType;
+                    if (param.getType().isArray()) {
+                        elementType = param.getType().getComponentType();
+                    } else {
+                        Type genericType = method.getGenericParameterTypes()[i];
+                        if (genericType instanceof ParameterizedType pt) {
+                            elementType = (Class<?>) pt.getActualTypeArguments()[0];
+                        } else {
+                            elementType = Object.class;
+                        }
+                    }
+
+                    // Types simples → fallback normal
+                    if (elementType.isPrimitive() || elementType.getName().startsWith("java.lang.")) {
+                        if (fallbackIndex < orderedValues.size()) {
+                            value = convert(orderedValues.get(fallbackIndex++), param.getType());
+                        }
+                        continue;
+                    }
+
+                    // LISTE D'OBJETS PERSONNALISÉS
+                    List<Object> list = new ArrayList<>();
+                    int index = 0;
+
+                    while (true) {
+                        boolean hasData = false;
+                        Object obj;
+                        try {
+                            obj = elementType.getDeclaredConstructor().newInstance();
+                        } catch (Exception e) {
+                            break;
+                        }
+
+                        Field[] fields = elementType.getDeclaredFields();
+                        for (Field field : fields) {
+                            String key = field.getName() + "[" + index + "]";
+                            if (allParams.containsKey(key)) {
+                                Object raw = allParams.get(key);
+                                String str = raw instanceof List<?> l && !l.isEmpty() ? l.get(0).toString() : raw.toString();
+                                field.setAccessible(true);
+                                try {
+                                    field.set(obj, convert(str, field.getType()));
+                                } catch (Exception ignored) {}
+                                hasData = true;
+                            }
+                        }
+
+                        if (!hasData) break;
+                        list.add(obj);
+                        index++;
+                    }
+
+                    if (param.getType().isArray()) {
+                        Object[] array = (Object[]) java.lang.reflect.Array.newInstance(elementType, list.size());
+                        value = list.toArray(array);
+                    } else {
+                        value = list;
+                    }
+                }
+                // 4.5. PARAMÈTRES PRIMITIFS SIMPLES (int, String, etc.) — pour éviter null
+                else if (param.getType().isPrimitive() || param.getType() == String.class) {
+                    if (fallbackIndex < orderedValues.size()) {
+                        value = convert(orderedValues.get(fallbackIndex++), param.getType());
+                    } else {
+                        // Valeur par défaut pour éviter null
+                        if (param.getType() == int.class) value = 0;
+                        else if (param.getType() == boolean.class) value = false;
+                        else value = "";
+                    }
+                }
+                // 5. OBJET PERSONNALISÉ SIMPLE (User, Adresse, etc.)
+                // 5. OBJET PERSONNALISÉ SIMPLE
                 else {
                     try {
                         Object obj = param.getType().getDeclaredConstructor().newInstance();
@@ -239,21 +308,19 @@ public class FrontServlet extends HttpServlet {
 
                         boolean filled = false;
 
-                        // 1. On essaie par nom de champ
                         for (Field field : fields) {
                             String fieldName = field.getName();
                             if (allParams.containsKey(fieldName)) {
                                 Object raw = allParams.get(fieldName);
-                                String strVal = (raw instanceof List<?> l && !l.isEmpty()) ? l.get(0).toString() : raw.toString();
+                                String str = raw instanceof List<?> l && !l.isEmpty() ? l.get(0).toString() : raw.toString();
                                 field.setAccessible(true);
-                                field.set(obj, convert(strVal, field.getType()));
+                                field.set(obj, convert(str, field.getType()));
                                 filled = true;
                             }
                         }
 
-                        // 2. Si rien trouvé → fallback par ordre (une seule fois pour tous les objets)
-                        if (!filled && !fallbackUsedForObject) {
-                            fallbackUsedForObject = true;
+                        if (!filled && !fallbackUsedForSimpleObject) {
+                            fallbackUsedForSimpleObject = true;
                             int idx = 0;
                             for (Field field : fields) {
                                 if (idx < orderedValues.size()) {
@@ -264,26 +331,18 @@ public class FrontServlet extends HttpServlet {
                         }
 
                         value = obj;
-                    } catch (Exception ignored) {
-                        // si on ne peut pas créer l’objet → value reste null
-                    }
+                    } catch (Exception ignored) {}
                 }
-
                 args[i] = value;
             }
 
-            // Invocation de la méthode
             Object result = method.invoke(controllerInstance, args);
             handleResult(result, request, response);
 
         } catch (Exception e) {
             response.setContentType("text/plain; charset=UTF-8");
             PrintWriter out = response.getWriter();
-            out.println("Erreur lors de l'invocation du methode :");
-            out.println("URL: " + url);
-            out.println("Contrôleur: " + mapping.getClassName());
-            out.println("Méthode: " + mapping.getMethodName());
-            out.println("Erreur: " + e.getMessage());
+            out.println("Erreur : " + e.getMessage());
             e.printStackTrace(out);
         }
     }
@@ -327,21 +386,42 @@ public class FrontServlet extends HttpServlet {
     }
 
     // Convertit une String en int, Integer, etc. (ou retourne String si inconnu)
-    private Object convert(String value, Class<?> targetType) {
-        if (value == null) return null;
-    
-        try {
-            if (targetType == int.class || targetType == Integer.class) {
-                return Integer.parseInt(value);
+    private Object convert(String str, Class<?> type) {
+        if (str == null || str.isEmpty()) {
+            if (type.isPrimitive()) {
+                if (type == int.class) return 0;
+                if (type == long.class) return 0L;
+                if (type == double.class) return 0.0;
+                if (type == boolean.class) return false;
             }
-            if (targetType == long.class || targetType == Long.class) {
-                return Long.parseLong(value);
-            }
-            // ... autres types
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Paramètre invalide : '" + value + "' n'est pas un " + targetType.getSimpleName());
+            return null;
         }
-        return value;
+
+        try {
+            if (type == String.class) {
+                return str;
+            } else if (type == int.class || type == Integer.class) {
+                return Integer.parseInt(str.trim());
+            } else if (type == long.class || type == Long.class) {
+                return Long.parseLong(str.trim());
+            } else if (type == double.class || type == Double.class) {
+                return Double.parseDouble(str.trim());
+            } else if (type == boolean.class || type == Boolean.class) {
+                return Boolean.parseBoolean(str.trim());
+            } else {
+                // Pour les autres types, on essaie le constructor
+                return type.getConstructor(String.class).newInstance(str);
+            }
+        } catch (Exception e) {
+            // Si la conversion échoue, on retourne une valeur par défaut sûre
+            if (type.isPrimitive()) {
+                if (type == int.class) return 0;
+                if (type == long.class) return 0L;
+                if (type == double.class) return 0.0;
+                if (type == boolean.class) return false;
+            }
+            return null;
+        }
     }
 
     private void handleResult(Object result, HttpServletRequest request, HttpServletResponse response)
