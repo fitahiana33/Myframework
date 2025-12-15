@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 import java.util.*;
+import java.util.LinkedHashMap;
 
 public class FrontServlet extends HttpServlet {
 
@@ -336,6 +337,9 @@ public class FrontServlet extends HttpServlet {
                 args[i] = value;
             }
 
+            // Pour handleResult savoir si c'est @JSON
+            request.setAttribute("calledMethodName", method.getName());
+            request.setAttribute("calledMethod", method);
             Object result = method.invoke(controllerInstance, args);
             handleResult(result, request, response);
 
@@ -426,43 +430,111 @@ public class FrontServlet extends HttpServlet {
 
     private void handleResult(Object result, HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
-        
         if (result == null) {
-            response.setContentType("text/plain; charset=UTF-8");
-            response.getWriter().println("null");
+            response.sendError(404);
             return;
         }
-        
-        if (result instanceof String) {
-            response.setContentType("text/plain; charset=UTF-8");
-            response.getWriter().println((String) result);
-            return;
-        }
-        
-        if (result instanceof ModelView) {
+
+        Method calledMethod = (Method) request.getAttribute("calledMethod");
+
+        if (calledMethod != null && calledMethod.isAnnotationPresent(Json.class)) {
+            response.setContentType("application/json; charset=UTF-8");
+            PrintWriter out = response.getWriter();
+
+            // On utilise LinkedHashMap pour garder l'ordre des clés
+            Map<String, Object> jsonResponse = new LinkedHashMap<>();
+            jsonResponse.put("status", "success");
+            jsonResponse.put("code", 200);
+            jsonResponse.put("resultat", result);
+
+            out.println(objectToJson(jsonResponse));
+            out.close();
+        } else if (result instanceof ModelView) {
+            // MODE MVC
             ModelView mv = (ModelView) result;
-            String view = mv.getView();
-            HashMap<String, Object> data = mv.getData();
-            if (!view.startsWith("/")) {
-                view = "/" + view;
+            for (Map.Entry<String, Object> entry : mv.getData().entrySet()) {
+                request.setAttribute(entry.getKey(), entry.getValue());
             }
-
-            // 1. On donne toute la map (pour ceux qui veulent l'utiliser)
-            request.setAttribute("model", data);
-
-            // Ajouter toutes les données du ModelView dans la request
-            for (String key : mv.getData().keySet()) {
-                request.setAttribute(key, mv.getData().get(key));
-            }
-            // Forward vers la JSP
-            RequestDispatcher dispatcher = request.getRequestDispatcher(view);
-            dispatcher.forward(request, response);
-            return;
+            request.getRequestDispatcher("/" + mv.getView()).forward(request, response);
+        } else if (result instanceof String) {
+            response.setContentType("text/html; charset=UTF-8");
+            PrintWriter out = response.getWriter();
+            out.println(result);
+        } else {
+            response.setContentType("text/plain; charset=UTF-8");
+            PrintWriter out = response.getWriter();
+            out.println(result.toString());
         }
-        
-        response.setContentType("text/plain; charset=UTF-8");
-        response.getWriter().println("Type de retour: " + result.getClass().getName());
-        response.getWriter().println("Valeur: " + result.toString());
+    }
+
+    private String objectToJson(Object obj) {
+        return objectToJson(obj, 0);
+    }
+
+    private String objectToJson(Object obj, int indentLevel) {
+        if (obj == null) {
+            return "null";
+        }
+
+        String indent = "  ".repeat(indentLevel);
+
+        if (obj instanceof String) {
+            return "\"" + ((String) obj).replace("\"", "\\\"").replace("\n", "\\n") + "\"";
+        }
+        if (obj instanceof Number || obj instanceof Boolean) {
+            return obj.toString();
+        }
+        if (obj instanceof Map) {
+            StringBuilder sb = new StringBuilder("{\n");
+            boolean first = true;
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) obj).entrySet()) {
+                if (!first) sb.append(",\n");
+                sb.append(indent + "  \"").append(entry.getKey()).append("\": ");
+                sb.append(objectToJson(entry.getValue(), indentLevel + 1));
+                first = false;
+            }
+            sb.append("\n").append(indent).append("}");
+            return sb.toString();
+        }
+        if (obj instanceof List) {
+            StringBuilder sb = new StringBuilder("[\n");
+            boolean first = true;
+            for (Object item : (List<?>) obj) {
+                if (!first) sb.append(",\n");
+                sb.append(indent + "  ");
+                sb.append(objectToJson(item, indentLevel + 1));
+                first = false;
+            }
+            sb.append("\n").append(indent).append("]");
+            return sb.toString();
+        }
+        if (obj.getClass().isArray()) {
+            StringBuilder sb = new StringBuilder("[\n");
+            int length = Array.getLength(obj);
+            for (int i = 0; i < length; i++) {
+                if (i > 0) sb.append(",\n");
+                sb.append(indent + "  ");
+                sb.append(objectToJson(Array.get(obj, i), indentLevel + 1));
+            }
+            sb.append("\n").append(indent).append("]");
+            return sb.toString();
+        }
+
+        // Objet personnalisé
+        StringBuilder sb = new StringBuilder("{\n");
+        boolean first = true;
+        for (Field field : obj.getClass().getDeclaredFields()) {
+            field.setAccessible(true);
+            try {
+                Object value = field.get(obj);
+                if (!first) sb.append(",\n");
+                sb.append(indent + "  \"").append(field.getName()).append("\": ");
+                sb.append(objectToJson(value, indentLevel + 1));
+                first = false;
+            } catch (Exception ignored) {}
+        }
+        sb.append("\n").append(indent).append("}");
+        return sb.toString();
     }
 
     private boolean displayControllerInfo(String path, Map<String, Map<String, String>> controllerMethods,
