@@ -198,9 +198,81 @@ public class FrontServlet extends HttpServlet {
                 Parameter param = parameters[i];
                 Object value = null;
 
-                // 1. Map globale
+                // 1. Map globale ou Map<String,Byte[]>
                 if (Map.class.isAssignableFrom(param.getType())) {
-                    value = allParams;
+                    // tenter de détecter Map<String,Byte[]> ou Map<String,byte[]>
+                    Type genericType = method.getGenericParameterTypes()[i];
+                    boolean producedSpecialMap = false;
+                    if (genericType instanceof ParameterizedType pt) {
+                        Type[] typeArgs = pt.getActualTypeArguments();
+                        if (typeArgs.length == 2) {
+                            Type k = typeArgs[0];
+                            Type v = typeArgs[1];
+                            boolean keyIsString = k instanceof Class && k == String.class;
+                            boolean valueIsBoxedByteArray = v instanceof Class && v == Byte[].class;
+                            boolean valueIsPrimitiveByteArray = v instanceof Class && v == byte[].class;
+
+                            if (keyIsString && (valueIsBoxedByteArray || valueIsPrimitiveByteArray)) {
+                                Map<String, Byte[]> filesMap = new HashMap<>();
+                                for (Map.Entry<String, Object> e : allParams.entrySet()) {
+                                    Object ov = e.getValue();
+                                    if (ov instanceof java.util.Map.Entry) {
+                                        Map.Entry<?,?> fe = (Map.Entry<?,?>) ov;
+                                        Object fk = fe.getKey(); Object fv = fe.getValue();
+                                        if (fv instanceof Byte[]) filesMap.put(String.valueOf(fk), (Byte[]) fv);
+                                        else if (fv instanceof byte[]) filesMap.put(String.valueOf(fk), toBoxed((byte[]) fv));
+                                    } else if (ov instanceof Byte[]) {
+                                        filesMap.put(e.getKey(), (Byte[]) ov);
+                                    } else if (ov instanceof byte[]) {
+                                        filesMap.put(e.getKey(), toBoxed((byte[]) ov));
+                                    } else if (ov instanceof java.util.List) {
+                                        for (Object it : (java.util.List) ov) {
+                                            if (it instanceof java.util.Map.Entry) {
+                                                Map.Entry<?,?> fe = (Map.Entry<?,?>) it;
+                                                Object fk = fe.getKey(); Object fv = fe.getValue();
+                                                if (fv instanceof Byte[]) filesMap.put(String.valueOf(fk), (Byte[]) fv);
+                                                else if (fv instanceof byte[]) filesMap.put(String.valueOf(fk), toBoxed((byte[]) fv));
+                                            } else if (it instanceof Byte[]) {
+                                                filesMap.put(e.getKey(), (Byte[]) it);
+                                            } else if (it instanceof byte[]) {
+                                                filesMap.put(e.getKey(), toBoxed((byte[]) it));
+                                            }
+                                        }
+                                    }
+                                }
+                                value = filesMap;
+                                producedSpecialMap = true;
+                            }
+                        }
+                    }
+                    if (!producedSpecialMap) {
+                        value = allParams;
+                    }
+                }
+                // Support pour Map.Entry<String, Byte[]> : on cherche d'abord des Map.Entry stockées
+                else if (java.util.Map.Entry.class.isAssignableFrom(param.getType())) {
+                    for (Map.Entry<String, Object> e : allParams.entrySet()) {
+                        Object v = e.getValue();
+                        if (v instanceof java.util.Map.Entry) {
+                            value = v;
+                            break;
+                        } else if (v instanceof java.util.List) {
+                            java.util.List lst = (java.util.List) v;
+                            if (!lst.isEmpty()) {
+                                Object first = lst.get(0);
+                                if (first instanceof java.util.Map.Entry) {
+                                    value = first;
+                                    break;
+                                } else if (first instanceof Byte[]) {
+                                    value = new java.util.AbstractMap.SimpleEntry<String, Byte[]>((String) e.getKey(), (Byte[]) first);
+                                    break;
+                                }
+                            }
+                        } else if (v instanceof Byte[]) {
+                            value = new java.util.AbstractMap.SimpleEntry<String, Byte[]>((String) e.getKey(), (Byte[]) v);
+                            break;
+                        }
+                    }
                 }
                 // 2. @RequestParam
                 else if (param.isAnnotationPresent(RequestParam.class)) {
@@ -251,7 +323,36 @@ public class FrontServlet extends HttpServlet {
                     }
 
                     // LISTE D'OBJETS PERSONNALISÉS
-                    List<Object> list = new ArrayList<>();
+                    // Support spécial pour List<Map.Entry<String,Byte[]>> ou Map.Entry[]
+                    if (java.util.Map.Entry.class.isAssignableFrom(elementType)) {
+                        List<Object> flist = new ArrayList<>();
+                        for (Map.Entry<String, Object> e : allParams.entrySet()) {
+                            Object v = e.getValue();
+                            if (v instanceof java.util.Map.Entry) {
+                                flist.add(v);
+                            } else if (v instanceof Byte[]) {
+                                flist.add(new java.util.AbstractMap.SimpleEntry<String, Byte[]>((String) e.getKey(), (Byte[]) v));
+                            } else if (v instanceof java.util.List) {
+                                for (Object it : (java.util.List) v) {
+                                    if (it instanceof java.util.Map.Entry) {
+                                        flist.add(it);
+                                    } else if (it instanceof Byte[]) {
+                                        flist.add(new java.util.AbstractMap.SimpleEntry<String, Byte[]>((String) e.getKey(), (Byte[]) it));
+                                    }
+                                }
+                            }
+                        }
+
+                        if (param.getType().isArray()) {
+                            Object[] array = (Object[]) java.lang.reflect.Array.newInstance(elementType, flist.size());
+                            value = flist.toArray(array);
+                        } else {
+                            value = flist;
+                        }
+                        // assign later
+                        // continue with normal flow
+                    } else {
+                        List<Object> list = new ArrayList<>();
                     int index = 0;
 
                     while (true) {
@@ -287,6 +388,7 @@ public class FrontServlet extends HttpServlet {
                         value = list.toArray(array);
                     } else {
                         value = list;
+                    }
                     }
                 }
                 // 4.5. PARAMÈTRES PRIMITIFS SIMPLES (int, String, etc.) — pour éviter null
@@ -368,7 +470,71 @@ public class FrontServlet extends HttpServlet {
                 }
             }
         }
+        // Traiter les fichiers si la requête est multipart
+        try {
+            String ct = request.getContentType();
+            if (ct != null && ct.toLowerCase().startsWith("multipart/")) {
+                Collection<Part> parts = request.getParts();
+                for (Part part : parts) {
+                    String fieldName = part.getName();
+                    String submittedFileName = part.getSubmittedFileName();
+                    if (submittedFileName != null && !submittedFileName.isEmpty()) {
+                        byte[] raw = part.getInputStream().readAllBytes();
+                        // Sauvegarder le fichier dans le dossier /upload en conservant le nom d'origine
+                        String savedName = submittedFileName;
+                        try {
+                            String uploadPath = getServletContext().getRealPath("/upload");
+                            if (uploadPath == null) {
+                                uploadPath = new File("upload").getAbsolutePath();
+                            }
+                            File dir = new File(uploadPath);
+                            if (!dir.exists()) dir.mkdirs();
+                            File outFile = new File(dir, submittedFileName);
+                            if (outFile.exists()) {
+                                // éviter l'écrasement : ajouter timestamp devant
+                                savedName = System.currentTimeMillis() + "_" + submittedFileName;
+                                outFile = new File(dir, savedName);
+                            }
+                            try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                                fos.write(raw);
+                            }
+                            System.out.println("FrontServlet: uploaded field='" + fieldName + "' submitted='" + submittedFileName + "' saved='" + savedName + "' size=" + raw.length);
+                        } catch (Exception ignored) {}
+                        Byte[] boxed = toBoxed(raw);
+
+                        // Construire une entrée (nom d'origine, octets)
+                        java.util.Map.Entry<String, Byte[]> fileEntry = new java.util.AbstractMap.SimpleEntry<>(submittedFileName, boxed);
+
+                        // stocker le nom sauvegardé pour information
+                        map.put(fieldName + "_savedName", savedName);
+
+                        // Insérer sous la clé du champ (ex: "file"): valeur = Byte[] | Map.Entry | List<...>
+                        if (map.containsKey(fieldName)) {
+                            Object existing = map.get(fieldName);
+                            if (existing instanceof java.util.List) {
+                                ((java.util.List) existing).add(fileEntry);
+                            } else {
+                                java.util.List<Object> lst = new java.util.ArrayList<>();
+                                lst.add(existing);
+                                lst.add(fileEntry);
+                                map.put(fieldName, lst);
+                            }
+                        } else {
+                            map.put(fieldName, fileEntry);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
         return map;
+    }
+
+    // utilitaire: convertir byte[] en Byte[] (pour correspondre à la demande)
+    private Byte[] toBoxed(byte[] src) {
+        if (src == null) return null;
+        Byte[] boxed = new Byte[src.length];
+        for (int i = 0; i < src.length; i++) boxed[i] = src[i];
+        return boxed;
     }
 
     // Extrait les valeurs des parties variables de l'URL (ex: /Ex/sprint6/123 → ["123"])
